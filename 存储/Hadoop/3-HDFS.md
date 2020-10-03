@@ -11,7 +11,7 @@ HDFS（Hadoop Distributed File System），是分布式文件系统。
 - 不适合大量小文件：受限于NameNode内存容量（每个文件、目录和数据块的存储信息约占150字节，100万大概300M，数十亿就超出当前硬件的能力。）
 - 单一写入：只支持==**单个写入者**==，且只能添加到文件末尾，==**不支持修改文件**==。
 
-# 设计
+# 架构设计
 
 ## 1. 组成模块
 
@@ -46,13 +46,15 @@ HDFS（Hadoop Distributed File System），是分布式文件系统。
 - 响应client的数据块读写请求；
 - 定时上报心跳、存储的块信息、块缓存。
 
-## 2. NN和 2NN模块
+## 2. 元数据管理模块
+
+元数据管理模块包含 NameNode 和 SecondaryNameNode。
 
 ### 工作机制
 
 - 为了性能，元数据存都放在==内存==。
-- 为了防止掉电导致数据丢失，需要定期通过FsImage镜像机制持久化到硬盘（类似Redis的RDB）。
-- 定期会有延迟，会丢失少量最后的数据，引入 Edits 同步追加（类似Redis的AOF)，写元数据时，追加到 Edits 中。
+- 为了防止掉电丢数据，需定期通过FsImage镜像机制持久化到硬盘（类似Redis的RDB）。
+- 定期会有延迟，会丢少量最后的数据，引入 Edits 同步追加（类似Redis的AOF)，写元数据时，追加到 Edits 中。
 - 一旦 NameNode 节点断电，可以将 FsImage 和 Edits 的合并，合成元数据。
 
 **为什么需要 SecondaryNameNode？**
@@ -211,22 +213,16 @@ start-dfs.sh
 
 ### 数据完整性
 
-**如果DataNode节点上的数据损坏了，却没有发现，很危险，如何解决？**
-
-如下是DataNode节点保证数据完整性的方法。
-
-当DataNode读取Block的时候，它会计算CheckSum。如果计算后的CheckSum，与Block创建时值不一样，说明Block已经损坏。Client改读取其他DataNode上的Block。DataNode在文件创建后会==周期性==的验证CheckSum。
-
-![image-20200812230925465](HDFS.assets/image-20200812230925465.png)
+当DataNode读取Block的时候，它会计算CheckSum。如果计算后的CheckSum，与Block创建时值不一样，说明Block已经损坏。客户端改读其他DataNode上的Block。DataNode在文件创建后会==周期性==的验证CheckSum。
 
 ### 掉线时限参数设置
 
 DataNode进程挂掉或者网络故障导致DataNode和NameNode无法通信，NameNode不回立即把该节点判定为死亡，需要经过一段超时时间。默认超时时间是10分钟+30秒。超时时间计算公式：
 
 ```sh
-Timeout = 2 * dfs.namenode.heartbeat.recheck-interval + 10 * dfs.heartbeat.interval
 # dfs.namenode.heartbeat.recheck-interval的单位是：毫秒
 # dfs.heartbeat.interval的单位是：秒
+Timeout = 2 * dfs.namenode.heartbeat.recheck-interval + 10 * dfs.heartbeat.interval
 ```
 
 ```xml
@@ -925,35 +921,35 @@ hdfs snapshotDiff /user/idc/input/ . .snapshot/idc170508
 hdfs dfs -cp /user/idc/input/.snapshot/s20170708-134303.027 /user
 ```
 
-# HDFS高可用
+# 高可用
 
 ## 概述
 
 1. 所谓HA（High Available），即高可用（7*24小时不中断服务）。
 
-2. 实现高可用最关键的策略是消除单点故障。HA严格来说应该分成各个组件的HA机制：HDFS的HA和YARN的HA。
+2. 实现高可用关键策略是消除单点。HA严格来说应分成各组件的HA：HDFS的HA 和 YARN的HA。
 
 3. Hadoop2.0之前，在HDFS集群中NameNode存在单点故障（SPOF）。
 
-4. NameNode主要在以下两个方面影响HDFS集群：
+4. HA作用：
 
-   NameNode机器发生意外，如宕机，集群将无法使用，直到管理员重启
+   - 防止NameNode机器发生意外，如宕机，集群无法使用。
 
-   NameNode机器需要升级，包括软件、硬件升级，此时集群也将无法使用
+   - NameNode机器升级，包括软件、硬件升级。
 
-   HDFS HA功能通过配置Active/Standby两个NameNodes实现在集群中对NameNode的热备来解决上述问题。如果出现故障，如机器崩溃或机器需要升级维护，这时可通过此种方式将NameNode很快的切换到另外一台机器。
+HA通过配置Active/Standby两个NameNode，对NameNode热备来解决上述问题。如果出现故障，如机器崩溃或机器需要升级维护，这时可通过此种方式将NameNode很快的切换到另外一台机器。
 
 ## 工作机制
 
-通过双 NameNode 消除单点故障
+通过双 NameNode 消除单点。
 
 ### 工作要点
 
 **1.元数据管理方式需要改变**
 
 - 内存中各自保存一份元数据；
-- Edits日志只有Active状态的NameNode节点可以做写操作；
-- 两个NameNode都可以读取Edits；
+- 只有Active状态的NameNode节点可写Edits；
+- 两个NameNode都可读Edits；
 - 共享的Edits放在一个共享存储中管理（qjournal和NFS两个主流实现）；
 
 **2.需要一个状态管理功能模块**
