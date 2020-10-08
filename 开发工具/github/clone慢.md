@@ -5,3 +5,4 @@ git config --global http.proxy 'socks5://127.0.0.1:1086'
 git config --global https.proxy 'socks5://127.0.0.1:1086'
 ```
 2. git clone 的地址用https地址，不要用SSH地址。
+
